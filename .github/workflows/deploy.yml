@@ -1,0 +1,63 @@
+name: Deploy NestJS app to EC2
+
+on:
+  workflow_dispatch:
+    inputs:
+      service_name:
+        description: 'Service name to deploy'
+        required: true
+        default: 'my-service'   # change or leave empty
+
+# Remove push trigger to prevent auto deploy on push
+# push:
+#   branches:
+#     - develop
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    environment:
+      name: deploy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js 18
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Package build folder
+        run: |
+          tar -czf app.tar.gz dist package.json package-lock.json
+
+      - name: Upload tarball to EC2
+        run: |
+          scp -o StrictHostKeyChecking=no app.tar.gz ubuntu@${{ secrets.SERVER_HOST }}:/home/ubuntu/
+
+      - name: Deploy on EC2
+        env:
+          SERVICE_NAME: ${{ github.event.inputs.service_name }}
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${{ secrets.SERVER_HOST }} <<EOF
+            set -e
+            cd /home/dinil-dev/system-storage/apps/$SERVICE_NAME
+            sudo systemctl stop $SERVICE_NAME || true
+            rm -rf *
+            tar -xvzf /home/ubuntu/app.tar.gz -C /home/dinil-dev/system-storage/apps/$SERVICE_NAME
+            npm ci --omit=dev
+            sudo systemctl start $SERVICE_NAME
+            echo "Deployment complete for $SERVICE_NAME!"
+          EOF
